@@ -34,9 +34,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add rates.json
-          if git diff --cached --quiet; then
-            echo "Немає змін"
-          else
-            git commit -m "Оновлення курсу"
-            git push
-          fi
+          git commit -m "Оновлення курсу" || echo "Немає змін для збереження"
+          git push
