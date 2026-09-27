@@ -1,3 +1,4 @@
+
 import os
 import json
 import requests
@@ -5,7 +6,9 @@ from datetime import datetime, timezone
 
 TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = "@kurs_gryvni_ua"
+
 DATA_FILE = "rates.json"
+HISTORY_FILE = "history.json"
 
 
 def get_rate(currency):
@@ -28,7 +31,7 @@ def send_message(text):
     response.raise_for_status()
 
 
-# Завантажуємо попередній курс
+# Попередній курс
 previous = {}
 
 if os.path.exists(DATA_FILE):
@@ -46,7 +49,6 @@ eur = get_rate("EUR")
 previous_usd = previous.get("usd")
 previous_eur = previous.get("eur")
 
-# Розраховуємо зміну
 usd_change = usd - previous_usd if previous_usd is not None else 0
 eur_change = eur - previous_eur if previous_eur is not None else 0
 
@@ -67,6 +69,7 @@ else:
     eur_signal = "➡️ EUR без змін"
 
 
+# Повідомлення
 message = (
     "💰 Курс гривні\n\n"
     f"🇺🇸 USD: {usd:.2f} грн ({usd_change:+.2f})\n"
@@ -79,16 +82,17 @@ message = (
 send_message(message)
 
 
-# Зберігаємо актуальний курс
-data = {
-    "usd": usd,
-    "eur": eur,
-    "updated": datetime.now(timezone.utc).isoformat()
+# Поточний час
+now = datetime.now(timezone.utc).isoformat()
+
+
+# Завантажуємо історію
+history = {
+    "usd": [],
+    "eur": []
 }
 
-with open(DATA_FILE, "w", encoding="utf-8") as file:
-    json.dump(data, file, ensure_ascii=False, indent=2)
-
-print("Опубліковано успішно!")
-print("USD:", usd, "зміна:", usd_change)
-print("EUR:", eur, "зміна:", eur_change)
+if os.path.exists(HISTORY_FILE):
+    try:
+        with open(HISTORY_FILE, "r", encoding="utf-8") as file:
+            history = json.load(file
