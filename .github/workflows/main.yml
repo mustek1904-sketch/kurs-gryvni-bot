@@ -5,6 +5,9 @@ on:
     - cron: "*/30 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -25,11 +28,15 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: python bot.py
-            - name: Зберегти курс
+
+      - name: Зберегти курс
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add rates.json
-          git diff --cached --quiet || git commit -m "Оновлення курсу"
-          git pull --rebase origin main
-          git push
+          if git diff --cached --quiet; then
+            echo "Немає змін"
+          else
+            git commit -m "Оновлення курсу"
+            git push
+          fi
