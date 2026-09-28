@@ -12,6 +12,17 @@ HISTORY_FILE = "history.json"
 
 MORNING_HOUR = 9
 
+# Мінімальна зміна крипти для окремої публікації
+CRYPTO_CHANGE_THRESHOLD = 0.005  # 0.5%
+
+CRYPTO = {
+    "bitcoin": "₿ BTC",
+    "ethereum": "Ξ ETH",
+    "tether": "💵 USDT",
+    "ethereum-classic": "🔷 ETC",
+    "zcash": "🛡 ZEC"
+}
+
 
 def get_rate(currency):
     url = (
@@ -23,6 +34,21 @@ def get_rate(currency):
     response.raise_for_status()
 
     return float(response.json()[0]["rate"])
+
+
+def get_crypto_rates():
+    ids = ",".join(CRYPTO.keys())
+
+    url = (
+        "https://api.coingecko.com/api/v3/simple/price"
+        f"?ids={ids}&vs_currencies=usd"
+        "&include_24hr_change=true"
+    )
+
+    response = requests.get(url, timeout=15)
+    response.raise_for_status()
+
+    return response.json()
 
 
 def send_message(text):
@@ -45,6 +71,15 @@ def change_text(change):
         return f"📈 +{change:.4f} грн"
     elif change < 0:
         return f"📉 {change:.4f} грн"
+    else:
+        return "➡️ без змін"
+
+
+def crypto_change_text(percent):
+    if percent > 0:
+        return f"📈 +{percent:.2f}%"
+    elif percent < 0:
+        return f"📉 {percent:.2f}%"
     else:
         return "➡️ без змін"
 
@@ -179,7 +214,9 @@ def calculate_forecast(values):
     }
 
 
-# Попередні дані
+# --------------------------------------------------
+# ПОПЕРЕДНІ ДАНІ
+# --------------------------------------------------
 
 previous = {}
 
@@ -194,18 +231,57 @@ if os.path.exists(DATA_FILE):
 previous_usd = previous.get("usd")
 previous_eur = previous.get("eur")
 
+previous_crypto = previous.get("crypto", {})
+
 last_morning_date = previous.get(
     "last_morning_date"
 )
 
 
-# Отримуємо курс НБУ
+# --------------------------------------------------
+# КУРС НБУ
+# --------------------------------------------------
 
 usd = get_rate("USD")
 eur = get_rate("EUR")
 
 
-# Час
+# --------------------------------------------------
+# КРИПТОВАЛЮТИ
+# --------------------------------------------------
+
+crypto_data = get_crypto_rates()
+
+crypto_rates = {}
+
+for coin_id in CRYPTO:
+
+    if coin_id not in crypto_data:
+        continue
+
+    usd_price = float(
+        crypto_data[coin_id]["usd"]
+    )
+
+    change_24h = float(
+        crypto_data[coin_id].get(
+            "usd_24h_change",
+            0
+        )
+    )
+
+    uah_price = usd_price * usd
+
+    crypto_rates[coin_id] = {
+        "usd": usd_price,
+        "uah": uah_price,
+        "change_24h": change_24h
+    }
+
+
+# --------------------------------------------------
+# ЧАС
+# --------------------------------------------------
 
 kyiv_time = datetime.now(
     ZoneInfo("Europe/Kyiv")
@@ -213,10 +289,14 @@ kyiv_time = datetime.now(
 
 today = kyiv_time.strftime("%Y-%m-%d")
 
-now = datetime.now(timezone.utc).isoformat()
+now = datetime.now(
+    timezone.utc
+).isoformat()
 
 
-# Визначаємо зміну
+# --------------------------------------------------
+# ЗМІНА ВАЛЮТ
+# --------------------------------------------------
 
 usd_changed = (
     previous_usd is not None
@@ -240,8 +320,47 @@ eur_change = (
     else 0
 )
 
+currency_changed = (
+    usd_changed
+    or eur_changed
+)
 
-# Історія
+
+# --------------------------------------------------
+# ЗМІНА КРИПТИ
+# --------------------------------------------------
+
+crypto_changed = False
+
+if previous_crypto:
+
+    for coin_id, current in crypto_rates.items():
+
+        old = previous_crypto.get(coin_id)
+
+        if old is None:
+            continue
+
+        old_price = float(
+            old.get("usd", 0)
+        )
+
+        if old_price <= 0:
+            continue
+
+        percent_change = (
+            (current["usd"] - old_price)
+            / old_price
+        )
+
+        if abs(percent_change) >= CRYPTO_CHANGE_THRESHOLD:
+            crypto_changed = True
+            break
+
+
+# --------------------------------------------------
+# ІСТОРІЯ ВАЛЮТ
+# --------------------------------------------------
 
 history = load_history()
 
@@ -258,25 +377,39 @@ history["eur"].append({
 save_history(history)
 
 
-# Чи потрібно публікувати?
+# --------------------------------------------------
+# ЧИ РАНКОВА ПУБЛІКАЦІЯ
+# --------------------------------------------------
 
 morning_publish = (
     kyiv_time.hour >= MORNING_HOUR
     and last_morning_date != today
 )
 
-rate_changed = (
-    usd_changed
-    or eur_changed
+
+# --------------------------------------------------
+# ВИЗНАЧАЄМО, ЩО ПУБЛІКУВАТИ
+# --------------------------------------------------
+
+publish_currency = (
+    morning_publish
+    or currency_changed
+)
+
+publish_crypto = (
+    morning_publish
+    or crypto_changed
 )
 
 should_publish = (
-    morning_publish
-    or rate_changed
+    publish_currency
+    or publish_crypto
 )
 
 
-# Прогноз
+# --------------------------------------------------
+# ПРОГНОЗ
+# --------------------------------------------------
 
 usd_values = prepare_values(
     history["usd"],
@@ -297,74 +430,150 @@ eur_forecast = calculate_forecast(
 )
 
 
-# Публікація
+# --------------------------------------------------
+# ФОРМУЄМО ПОВІДОМЛЕННЯ
+# --------------------------------------------------
 
 if should_publish:
 
-    message = (
-        "💰 КУРС ГРИВНІ\n\n"
+    message_parts = []
 
-        f"🇺🇸 USD: {usd:.2f} грн\n"
-        f"{change_text(usd_change)}\n\n"
 
-        f"🇪🇺 EUR: {eur:.2f} грн\n"
-        f"{change_text(eur_change)}\n\n"
+    # ----------------------------------------------
+    # ВАЛЮТИ
+    # ----------------------------------------------
 
-        f"🕐 Оновлено: "
-        f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
+    if publish_currency:
 
-        "📊 Дані: НБУ"
+        currency_message = (
+            "💰 КУРС ВАЛЮТ\n\n"
+
+            f"🇺🇸 USD: {usd:.2f} грн\n"
+            f"{change_text(usd_change)}\n\n"
+
+            f"🇪🇺 EUR: {eur:.2f} грн\n"
+            f"{change_text(eur_change)}\n\n"
+
+            f"🕐 Оновлено: "
+            f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
+
+            "📊 Дані: НБУ"
+        )
+
+
+        if morning_publish:
+
+            if (
+                usd_forecast is not None
+                or eur_forecast is not None
+            ):
+
+                currency_message += (
+                    "\n\n"
+                    "🔮 ОРІЄНТОВНИЙ ПРОГНОЗ "
+                    "НА 24 ГОДИНИ"
+                )
+
+                if usd_forecast is not None:
+
+                    currency_message += (
+                        "\n\n"
+                        "🇺🇸 USD\n"
+                        f"Поточний: "
+                        f"{usd:.2f} грн\n"
+                        f"Прогноз: ≈ "
+                        f"{usd_forecast['forecast']:.2f} грн\n"
+                        f"{change_text("
+                        f"usd_forecast['change']"
+                        f")}\n"
+                        f"{usd_forecast['trend']}\n"
+                        f"📊 Даних використано: "
+                        f"{usd_forecast['samples']}"
+                    )
+
+                if eur_forecast is not None:
+
+                    currency_message += (
+                        "\n\n"
+                        "🇪🇺 EUR\n"
+                        f"Поточний: "
+                        f"{eur:.2f} грн\n"
+                        f"Прогноз: ≈ "
+                        f"{eur_forecast['forecast']:.2f} грн\n"
+                        f"{change_text("
+                        f"eur_forecast['change']"
+                        f")}\n"
+                        f"{eur_forecast['trend']}\n"
+                        f"📊 Даних використано: "
+                        f"{eur_forecast['samples']}"
+                    )
+
+                currency_message += (
+                    "\n\n"
+                    "⚠️ Це статистична оцінка, "
+                    "а не гарантований майбутній курс."
+                )
+
+            else:
+
+                currency_message += (
+                    "\n\n"
+                    "🔮 ПРОГНОЗ\n"
+                    "⏳ Поки недостатньо "
+                    "історичних даних."
+                )
+
+
+        message_parts.append(
+            currency_message
+        )
+
+
+    # ----------------------------------------------
+    # КРИПТА
+    # ----------------------------------------------
+
+    if publish_crypto:
+
+        crypto_message = (
+            "🪙 КУРС КРИПТОВАЛЮТ\n\n"
+        )
+
+        for coin_id, name in CRYPTO.items():
+
+            if coin_id not in crypto_rates:
+                continue
+
+            coin = crypto_rates[coin_id]
+
+            crypto_message += (
+                f"{name}: "
+                f"${coin['usd']:,.2f} / "
+                f"{coin['uah']:,.2f} грн\n"
+                f"{crypto_change_text("
+                f"coin['change_24h']"
+                f")}\n\n"
+            )
+
+        crypto_message += (
+            f"🕐 Оновлено: "
+            f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
+            "📊 Дані: CoinGecko\n"
+            "ℹ️ Публікація при зміні від 0,5%"
+        )
+
+        message_parts.append(
+            crypto_message
+        )
+
+
+    # ----------------------------------------------
+    # ОБ'ЄДНАННЯ
+    # ----------------------------------------------
+
+    message = "\n\n━━━━━━━━━━━━━━\n\n".join(
+        message_parts
     )
-
-
-    if usd_forecast is not None or eur_forecast is not None:
-
-        message += (
-            "\n\n"
-            "🔮 ОРІЄНТОВНИЙ ПРОГНОЗ НА 24 ГОДИНИ"
-        )
-
-        if usd_forecast is not None:
-
-            message += (
-                "\n\n"
-                "🇺🇸 USD\n"
-                f"Поточний: {usd:.2f} грн\n"
-                f"Прогноз: ≈ "
-                f"{usd_forecast['forecast']:.2f} грн\n"
-                f"{change_text(usd_forecast['change'])}\n"
-                f"{usd_forecast['trend']}\n"
-                f"📊 Даних використано: "
-                f"{usd_forecast['samples']}"
-            )
-
-        if eur_forecast is not None:
-
-            message += (
-                "\n\n"
-                "🇪🇺 EUR\n"
-                f"Поточний: {eur:.2f} грн\n"
-                f"Прогноз: ≈ "
-                f"{eur_forecast['forecast']:.2f} грн\n"
-                f"{change_text(eur_forecast['change'])}\n"
-                f"{eur_forecast['trend']}\n"
-                f"📊 Даних використано: "
-                f"{eur_forecast['samples']}"
-            )
-
-        message += (
-            "\n\n"
-            "⚠️ Це статистична оцінка, "
-            "а не гарантований майбутній курс."
-        )
-
-    else:
-
-        message += (
-            "\n\n"
-            "🔮 ПРОГНОЗ\n"
-            "⏳ Поки недостатньо історичних даних."
-        )
 
 
     send_message(message)
@@ -374,24 +583,29 @@ if should_publish:
     if morning_publish:
         last_morning_date = today
 
+
 else:
 
     print(
-        "Курс не змінився. "
-        "Публікація не потрібна."
+        "Змін для публікації немає."
     )
 
 
-# Зберігаємо поточний курс
+# --------------------------------------------------
+# ЗБЕРІГАЄМО ДАНІ
+# --------------------------------------------------
 
 data = {
     "usd": usd,
     "eur": eur,
+    "crypto": crypto_rates,
     "updated": now,
     "last_morning_date": last_morning_date
 }
 
+
 with open(DATA_FILE, "w", encoding="utf-8") as file:
+
     json.dump(
         data,
         file,
