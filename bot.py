@@ -60,7 +60,7 @@ if os.path.exists(DATA_FILE):
 
 
 # -----------------------------------
-# Отримуємо курс НБУ
+# Отримуємо курс
 # -----------------------------------
 
 usd = get_rate("USD")
@@ -69,27 +69,15 @@ eur = get_rate("EUR")
 previous_usd = previous.get("usd")
 previous_eur = previous.get("eur")
 
-usd_change = (
-    usd - previous_usd
-    if previous_usd is not None
-    else 0
-)
-
-eur_change = (
-    eur - previous_eur
-    if previous_eur is not None
-    else 0
-)
+usd_change = usd - previous_usd if previous_usd is not None else 0
+eur_change = eur - previous_eur if previous_eur is not None else 0
 
 
 # -----------------------------------
-# Київський час
+# Час
 # -----------------------------------
 
-kyiv_time = datetime.now(
-    ZoneInfo("Europe/Kyiv")
-)
-
+kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv"))
 now = datetime.now(timezone.utc).isoformat()
 
 
@@ -103,8 +91,7 @@ message = (
     f"{change_text(usd_change)}\n\n"
     f"🇪🇺 EUR: {eur:.2f} грн\n"
     f"{change_text(eur_change)}\n\n"
-    f"🕐 Оновлено: "
-    f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
+    f"🕐 Оновлено: {kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
     "📊 Дані: НБУ"
 )
 
@@ -149,7 +136,7 @@ with open(HISTORY_FILE, "w", encoding="utf-8") as file:
 
 
 # -----------------------------------
-# Зберігаємо останній курс
+# Останній курс
 # -----------------------------------
 
 data = {
@@ -173,11 +160,84 @@ with open(DATA_FILE, "w", encoding="utf-8") as file:
 
 today = kyiv_time.strftime("%Y-%m-%d")
 
-# Завантажуємо інформацію про останній підсумок
 summary_data = {}
 
 if os.path.exists(SUMMARY_FILE):
     with open(SUMMARY_FILE, "r", encoding="utf-8") as file:
         summary_data = json.load(file)
 
-last
+last_summary_date = summary_data.get("date")
+
+
+if kyiv_time.hour >= 23 and last_summary_date != today:
+
+    today_usd = []
+    today_eur = []
+
+    for item in history["usd"]:
+        try:
+            item_time = datetime.fromisoformat(item["date"])
+            item_time = item_time.astimezone(ZoneInfo("Europe/Kyiv"))
+
+            if item_time.strftime("%Y-%m-%d") == today:
+                today_usd.append(float(item["rate"]))
+
+        except Exception:
+            continue
+
+
+    for item in history["eur"]:
+        try:
+            item_time = datetime.fromisoformat(item["date"])
+            item_time = item_time.astimezone(ZoneInfo("Europe/Kyiv"))
+
+            if item_time.strftime("%Y-%m-%d") == today:
+                today_eur.append(float(item["rate"]))
+
+        except Exception:
+            continue
+
+
+    if today_usd and today_eur:
+
+        start_usd = today_usd[0]
+        end_usd = today_usd[-1]
+
+        start_eur = today_eur[0]
+        end_eur = today_eur[-1]
+
+        usd_day_change = end_usd - start_usd
+        eur_day_change = end_eur - start_eur
+
+        summary_message = (
+            "📊 ПІДСУМОК ЗА ДЕНЬ\n\n"
+
+            f"🇺🇸 USD\n"
+            f"{start_usd:.2f} → {end_usd:.2f} грн\n"
+            f"{change_text(usd_day_change)}\n\n"
+
+            f"🇪🇺 EUR\n"
+            f"{start_eur:.2f} → {end_eur:.2f} грн\n"
+            f"{change_text(eur_day_change)}\n\n"
+
+            f"📅 {kyiv_time.strftime('%d.%m.%Y')}\n"
+            "📊 Дані: НБУ"
+        )
+
+        send_message(summary_message)
+
+        summary_data = {
+            "date": today
+        }
+
+        with open(SUMMARY_FILE, "w", encoding="utf-8") as file:
+            json.dump(
+                summary_data,
+                file,
+                ensure_ascii=False,
+                indent=2
+            )
+
+
+print("Опубліковано успішно!")
+print("Історію збережено!")
