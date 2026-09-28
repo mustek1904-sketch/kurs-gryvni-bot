@@ -10,6 +10,8 @@ CHANNEL = "@kurs_gryvni_ua"
 DATA_FILE = "rates.json"
 HISTORY_FILE = "history.json"
 
+MORNING_HOUR = 9
+
 
 def get_rate(currency):
     url = (
@@ -106,17 +108,9 @@ def prepare_values(items, days=7):
 
 
 def calculate_forecast(values):
-    """
-    Статистичний прогноз на наступні 24 години.
-
-    Використовує лінійну тенденцію історичних значень.
-    """
-
     if len(values) < 12:
         return None
 
-    # Беремо максимум 336 останніх точок
-    # (7 днів при запуску кожні 30 хвилин)
     values = values[-336:]
 
     first_time = values[0]["date"]
@@ -131,9 +125,6 @@ def calculate_forecast(values):
 
         x.append(minutes)
         y.append(item["rate"])
-
-    if len(x) < 2:
-        return None
 
     average_x = sum(x) / len(x)
     average_y = sum(y) / len(y)
@@ -158,13 +149,10 @@ def calculate_forecast(values):
 
     current_rate = values[-1]["rate"]
 
-    # Прогноз на 24 години
     forecast = current_rate + (
         slope * 1440
     )
 
-    # Захист від нереалістичного стрибка.
-    # Максимум ±2% від поточного курсу.
     maximum_change = current_rate * 0.02
 
     if forecast > current_rate + maximum_change:
@@ -192,7 +180,7 @@ def calculate_forecast(values):
 
 
 # -----------------------------------
-# Попередній курс
+# Попередні дані
 # -----------------------------------
 
 previous = {}
@@ -205,6 +193,14 @@ if os.path.exists(DATA_FILE):
         pass
 
 
+previous_usd = previous.get("usd")
+previous_eur = previous.get("eur")
+
+last_morning_date = previous.get(
+    "last_morning_date"
+)
+
+
 # -----------------------------------
 # Отримуємо курс НБУ
 # -----------------------------------
@@ -212,8 +208,33 @@ if os.path.exists(DATA_FILE):
 usd = get_rate("USD")
 eur = get_rate("EUR")
 
-previous_usd = previous.get("usd")
-previous_eur = previous.get("eur")
+
+# -----------------------------------
+# Час
+# -----------------------------------
+
+kyiv_time = datetime.now(
+    ZoneInfo("Europe/Kyiv")
+)
+
+today = kyiv_time.strftime("%Y-%m-%d")
+
+now = datetime.now(timezone.utc).isoformat()
+
+
+# -----------------------------------
+# Визначаємо зміну
+# -----------------------------------
+
+usd_changed = (
+    previous_usd is not None
+    and usd != previous_usd
+)
+
+eur_changed = (
+    previous_eur is not None
+    and eur != previous_eur
+)
 
 usd_change = (
     usd - previous_usd
@@ -226,17 +247,6 @@ eur_change = (
     if previous_eur is not None
     else 0
 )
-
-
-# -----------------------------------
-# Час
-# -----------------------------------
-
-kyiv_time = datetime.now(
-    ZoneInfo("Europe/Kyiv")
-)
-
-now = datetime.now(timezone.utc).isoformat()
 
 
 # -----------------------------------
@@ -259,26 +269,27 @@ save_history(history)
 
 
 # -----------------------------------
-# Поточний курс
+# Чи потрібно публікувати?
 # -----------------------------------
 
-data = {
-    "usd": usd,
-    "eur": eur,
-    "updated": now
-}
+morning_publish = (
+    kyiv_time.hour >= MORNING_HOUR
+    and last_morning_date != today
+)
 
-with open(DATA_FILE, "w", encoding="utf-8") as file:
-    json.dump(
-        data,
-        file,
-        ensure_ascii=False,
-        indent=2
-    )
+rate_changed = (
+    usd_changed
+    or eur_changed
+)
+
+should_publish = (
+    morning_publish
+    or rate_changed
+)
 
 
 # -----------------------------------
-# Готуємо дані для прогнозу
+# Прогноз
 # -----------------------------------
 
 usd_values = prepare_values(
@@ -301,87 +312,121 @@ eur_forecast = calculate_forecast(
 
 
 # -----------------------------------
-# Основне повідомлення
+# Публікація
 # -----------------------------------
 
-message = (
-    "💰 КУРС ГРИВНІ\n\n"
+if should_publish:
 
-    f"🇺🇸 USD: {usd:.2f} грн\n"
-    f"{change_text(usd_change)}\n\n"
+    message = (
+        "💰 КУРС ГРИВНІ\n\n"
 
-    f"🇪🇺 EUR: {eur:.2f} грн\n"
-    f"{change_text(eur_change)}\n\n"
+        f"🇺🇸 USD: {usd:.2f} грн\n"
+        f"{change_text(usd_change)}\n\n"
 
-    f"🕐 Оновлено: "
-    f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
+        f"🇪🇺 EUR: {eur:.2f} грн\n"
+        f"{change_text(eur_change)}\n\n"
 
-    "📊 Дані: НБУ"
-)
+        f"🕐 Оновлено: "
+        f"{kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
 
-
-# -----------------------------------
-# Прогноз
-# -----------------------------------
-
-if usd_forecast is not None or eur_forecast is not None:
-
-    message += (
-        "\n\n"
-        "🔮 ОРІЄНТОВНИЙ ПРОГНОЗ НА 24 ГОДИНИ"
+        "📊 Дані: НБУ"
     )
 
-    if usd_forecast is not None:
+
+    # -----------------------------------
+    # Прогноз
+    # -----------------------------------
+
+    if usd_forecast is not None or eur_forecast is not None:
 
         message += (
             "\n\n"
-            "🇺🇸 USD\n"
-            f"Поточний: {usd:.2f} грн\n"
-            f"Прогноз: ≈ "
-            f"{usd_forecast['forecast']:.2f} грн\n"
-            f"{change_text(usd_forecast['change'])}\n"
-            f"{usd_forecast['trend']}\n"
-            f"📊 Даних використано: "
-            f"{usd_forecast['samples']}"
+            "🔮 ОРІЄНТОВНИЙ ПРОГНОЗ НА 24 ГОДИНИ"
         )
 
-    if eur_forecast is not None:
+        if usd_forecast is not None:
+
+            message += (
+                "\n\n"
+                "🇺🇸 USD\n"
+                f"Поточний: {usd:.2f} грн\n"
+                f"Прогноз: ≈ "
+                f"{usd_forecast['forecast']:.2f} грн\n"
+                f"{change_text(usd_forecast['change'])}\n"
+                f"{usd_forecast['trend']}\n"
+                f"📊 Даних використано: "
+                f"{usd_forecast['samples']}"
+            )
+
+        if eur_forecast is not None:
+
+            message += (
+                "\n\n"
+                "🇪🇺 EUR\n"
+                f"Поточний: {eur:.2f} грн\n"
+                f"Прогноз: ≈ "
+                f"{eur_forecast['forecast']:.2f} грн\n"
+                f"{change_text(eur_forecast['change'])}\n"
+                f"{eur_forecast['trend']}\n"
+                f"📊 Даних використано: "
+                f"{eur_forecast['samples']}"
+            )
 
         message += (
             "\n\n"
-            "🇪🇺 EUR\n"
-            f"Поточний: {eur:.2f} грн\n"
-            f"Прогноз: ≈ "
-            f"{eur_forecast['forecast']:.2f} грн\n"
-            f"{change_text(eur_forecast['change'])}\n"
-            f"{eur_forecast['trend']}\n"
-            f"📊 Даних використано: "
-            f"{eur_forecast['samples']}"
+            "⚠️ Це статистична оцінка, "
+            "а не гарантований майбутній курс."
         )
 
-    message += (
-        "\n\n"
-        "⚠️ Це статистична оцінка, "
-        "а не гарантований майбутній курс."
-    )
+    else:
+
+        message += (
+            "\n\n"
+            "🔮 ПРОГНОЗ\n"
+            "⏳ Поки недостатньо історичних даних."
+        )
+
+
+    # -----------------------------------
+    # Відправляємо
+    # -----------------------------------
+
+    send_message(message)
+
+    print("Повідомлення опубліковано!")
+
+
+    # Запам'ятовуємо ранкову публікацію
+    if morning_publish:
+        last_morning_date = today
 
 else:
 
-    message += (
-        "\n\n"
-        "🔮 ПРОГНОЗ\n"
-        "⏳ Поки недостатньо історичних даних "
-        "для статистичного прогнозу."
+    print(
+        "Курс не змінився. "
+        "Публікація не потрібна."
     )
 
 
 # -----------------------------------
-# Відправляємо повідомлення
+# Зберігаємо поточний курс
 # -----------------------------------
 
-send_message(message)
+data = {
+    "usd": usd,
+    "eur": eur,
+    "updated": now,
+    "last_morning_date": last_morning_date
+}
+
+with open(DATA_FILE, "w", encoding="utf-8") as file:
+    json.dump(
+        data,
+        file,
+        ensure_ascii=False,
+        indent=2
+    )
 
 
-print("Опубліковано успішно!")
-print("Історію збережено!")
-print("Статистичний прогноз розраховано.")
+print("Перевірку завершено.")
+``
