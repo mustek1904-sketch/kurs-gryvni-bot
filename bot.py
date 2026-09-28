@@ -44,15 +44,19 @@ previous_eur = previous.get("eur")
 usd_change = usd - previous_usd if previous_usd is not None else 0
 eur_change = eur - previous_eur if previous_eur is not None else 0
 
-# Напрямок зміни курсу
+# Напрямок та точна зміна курсу
 def change_text(change):
     if change > 0:
-        return f"🔺 +{change:.2f} грн"
+        return f"🔺 +{change:.4f} грн"
     elif change < 0:
-        return f"🔻 {change:.2f} грн"
+        return f"🔻 {change:.4f} грн"
     else:
         return "➡️ без змін"
 
+# Час оновлення за Києвом
+from zoneinfo import ZoneInfo
+
+kyiv_time = datetime.now(ZoneInfo("Europe/Kyiv"))
 
 # Повідомлення
 message = (
@@ -61,6 +65,7 @@ message = (
     f"{change_text(usd_change)}\n\n"
     f"🇪🇺 EUR: {eur:.2f} грн\n"
     f"{change_text(eur_change)}\n\n"
+    f"🕐 Оновлено: {kyiv_time.strftime('%d.%m.%Y о %H:%M')}\n"
     "📊 Дані: НБУ"
 )
 
