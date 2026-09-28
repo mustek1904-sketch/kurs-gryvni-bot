@@ -40,9 +40,9 @@ def send_message(text):
 
 def change_text(change):
     if change > 0:
-        return f"🔺 +{change:.4f} грн"
+        return f"📈 +{change:.4f} грн"
     elif change < 0:
-        return f"🔻 {change:.4f} грн"
+        return f"📉 {change:.4f} грн"
     else:
         return "➡️ без змін"
 
@@ -76,9 +76,9 @@ def save_history(history):
         )
 
 
-def get_recent_values(items, hours=24):
+def prepare_values(items, days=7):
     now = datetime.now(timezone.utc)
-    limit = now - timedelta(hours=hours)
+    limit = now - timedelta(days=days)
 
     values = []
 
@@ -87,7 +87,9 @@ def get_recent_values(items, hours=24):
             item_time = datetime.fromisoformat(item["date"])
 
             if item_time.tzinfo is None:
-                item_time = item_time.replace(tzinfo=timezone.utc)
+                item_time = item_time.replace(
+                    tzinfo=timezone.utc
+                )
 
             if item_time >= limit:
                 values.append({
@@ -103,44 +105,94 @@ def get_recent_values(items, hours=24):
     return values
 
 
-def make_forecast(values):
+def calculate_forecast(values):
     """
-    Простий статистичний прогноз.
+    Статистичний прогноз на наступні 24 години.
 
-    Використовуємо середню зміну між вимірюваннями
-    за останні 24 години.
-
-    Потрібно мінімум 3 вимірювання.
+    Використовує лінійну тенденцію історичних значень.
     """
 
-    if len(values) < 3:
+    if len(values) < 12:
         return None
 
-    changes = []
+    # Беремо максимум 336 останніх точок
+    # (7 днів при запуску кожні 30 хвилин)
+    values = values[-336:]
 
-    for i in range(1, len(values)):
-        change = values[i]["rate"] - values[i - 1]["rate"]
-        changes.append(change)
+    first_time = values[0]["date"]
 
-    if not changes:
+    x = []
+    y = []
+
+    for item in values:
+        minutes = (
+            item["date"] - first_time
+        ).total_seconds() / 60
+
+        x.append(minutes)
+        y.append(item["rate"])
+
+    if len(x) < 2:
         return None
 
-    average_change = sum(changes) / len(changes)
+    average_x = sum(x) / len(x)
+    average_y = sum(y) / len(y)
+
+    numerator = 0
+    denominator = 0
+
+    for i in range(len(x)):
+        numerator += (
+            (x[i] - average_x)
+            * (y[i] - average_y)
+        )
+
+        denominator += (
+            (x[i] - average_x) ** 2
+        )
+
+    if denominator == 0:
+        return None
+
+    slope = numerator / denominator
 
     current_rate = values[-1]["rate"]
 
-    forecast = current_rate + average_change
+    # Прогноз на 24 години
+    forecast = current_rate + (
+        slope * 1440
+    )
+
+    # Захист від нереалістичного стрибка.
+    # Максимум ±2% від поточного курсу.
+    maximum_change = current_rate * 0.02
+
+    if forecast > current_rate + maximum_change:
+        forecast = current_rate + maximum_change
+
+    if forecast < current_rate - maximum_change:
+        forecast = current_rate - maximum_change
+
+    forecast_change = forecast - current_rate
+
+    if forecast_change > 0.005:
+        trend = "📈 тенденція до зростання"
+    elif forecast_change < -0.005:
+        trend = "📉 тенденція до зниження"
+    else:
+        trend = "➡️ тенденція стабільна"
 
     return {
         "current": current_rate,
         "forecast": forecast,
-        "change": forecast - current_rate,
+        "change": forecast_change,
+        "trend": trend,
         "samples": len(values)
     }
 
 
 # -----------------------------------
-# Отримуємо попередній курс
+# Попередній курс
 # -----------------------------------
 
 previous = {}
@@ -188,15 +240,10 @@ now = datetime.now(timezone.utc).isoformat()
 
 
 # -----------------------------------
-# Завантажуємо історію
+# Історія
 # -----------------------------------
 
 history = load_history()
-
-
-# -----------------------------------
-# Додаємо нові значення
-# -----------------------------------
 
 history["usd"].append({
     "date": now,
@@ -208,16 +255,11 @@ history["eur"].append({
     "rate": eur
 })
 
-
-# -----------------------------------
-# Зберігаємо історію
-# -----------------------------------
-
 save_history(history)
 
 
 # -----------------------------------
-# Зберігаємо останній курс
+# Поточний курс
 # -----------------------------------
 
 data = {
@@ -236,21 +278,26 @@ with open(DATA_FILE, "w", encoding="utf-8") as file:
 
 
 # -----------------------------------
-# Розрахунок прогнозу
+# Готуємо дані для прогнозу
 # -----------------------------------
 
-usd_recent = get_recent_values(
+usd_values = prepare_values(
     history["usd"],
-    24
+    days=7
 )
 
-eur_recent = get_recent_values(
+eur_values = prepare_values(
     history["eur"],
-    24
+    days=7
 )
 
-usd_forecast = make_forecast(usd_recent)
-eur_forecast = make_forecast(eur_recent)
+usd_forecast = calculate_forecast(
+    usd_values
+)
+
+eur_forecast = calculate_forecast(
+    eur_values
+)
 
 
 # -----------------------------------
@@ -274,39 +321,57 @@ message = (
 
 
 # -----------------------------------
-# Додаємо прогноз
+# Прогноз
 # -----------------------------------
 
 if usd_forecast is not None or eur_forecast is not None:
 
-    message += "\n\n🔮 ОРІЄНТОВНИЙ ПРОГНОЗ\n"
+    message += (
+        "\n\n"
+        "🔮 ОРІЄНТОВНИЙ ПРОГНОЗ НА 24 ГОДИНИ"
+    )
 
     if usd_forecast is not None:
+
         message += (
-            "\n🇺🇸 USD на наступну добу:\n"
-            f"≈ {usd_forecast['forecast']:.2f} грн\n"
+            "\n\n"
+            "🇺🇸 USD\n"
+            f"Поточний: {usd:.2f} грн\n"
+            f"Прогноз: ≈ "
+            f"{usd_forecast['forecast']:.2f} грн\n"
             f"{change_text(usd_forecast['change'])}\n"
-            f"📊 Вимірювань: {usd_forecast['samples']}"
+            f"{usd_forecast['trend']}\n"
+            f"📊 Даних використано: "
+            f"{usd_forecast['samples']}"
         )
 
     if eur_forecast is not None:
+
         message += (
-            "\n\n🇪🇺 EUR на наступну добу:\n"
-            f"≈ {eur_forecast['forecast']:.2f} грн\n"
+            "\n\n"
+            "🇪🇺 EUR\n"
+            f"Поточний: {eur:.2f} грн\n"
+            f"Прогноз: ≈ "
+            f"{eur_forecast['forecast']:.2f} грн\n"
             f"{change_text(eur_forecast['change'])}\n"
-            f"📊 Вимірювань: {eur_forecast['samples']}"
+            f"{eur_forecast['trend']}\n"
+            f"📊 Даних використано: "
+            f"{eur_forecast['samples']}"
         )
 
     message += (
-        "\n\n⚠️ Прогноз статистичний і не гарантує "
-        "майбутній курс."
+        "\n\n"
+        "⚠️ Це статистична оцінка, "
+        "а не гарантований майбутній курс."
     )
 
 else:
 
     message += (
-        "\n\n🔮 ПРОГНОЗ\n"
-        "⏳ Поки недостатньо історичних даних."
+        "\n\n"
+        "🔮 ПРОГНОЗ\n"
+        "⏳ Поки недостатньо історичних даних "
+        "для статистичного прогнозу."
     )
 
 
@@ -319,4 +384,4 @@ send_message(message)
 
 print("Опубліковано успішно!")
 print("Історію збережено!")
-print("Прогноз розраховано.")
+print("Статистичний прогноз розраховано.")
