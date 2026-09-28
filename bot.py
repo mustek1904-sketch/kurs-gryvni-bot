@@ -125,7 +125,7 @@ if os.path.exists(HISTORY_FILE):
         history = json.load(file)
 
 history.setdefault("usd", [])
-history.setdefault("eur")
+history.setdefault("eur", [])
 
 
 history["usd"].append({
