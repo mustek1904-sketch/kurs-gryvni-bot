@@ -44,13 +44,26 @@ previous_eur = previous.get("eur")
 usd_change = usd - previous_usd if previous_usd is not None else 0
 eur_change = eur - previous_eur if previous_eur is not None else 0
 
+# Напрямок зміни курсу
+def change_text(change):
+    if change > 0:
+        return f"🔺 +{change:.2f} грн"
+    elif change < 0:
+        return f"🔻 {change:.2f} грн"
+    else:
+        return "➡️ без змін"
+
+
 # Повідомлення
 message = (
-    "💰 Курс гривні\n\n"
-    f"🇺🇸 USD: {usd:.2f} грн ({usd_change:+.2f})\n"
-    f"🇪🇺 EUR: {eur:.2f} грн ({eur_change:+.2f})\n\n"
+    "💰 КУРС ГРИВНІ\n\n"
+    f"🇺🇸 USD: {usd:.2f} грн\n"
+    f"{change_text(usd_change)}\n\n"
+    f"🇪🇺 EUR: {eur:.2f} грн\n"
+    f"{change_text(eur_change)}\n\n"
     "📊 Дані: НБУ"
 )
+
 
 send_message(message)
 
